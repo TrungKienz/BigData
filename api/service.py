@@ -25,16 +25,29 @@ from fraud_pipeline.serialization import dumps
 from .schemas import ScoreRequest, ScoreResponse
 
 
-os.environ.setdefault("FRAUD_MODEL_TYPE", "v1")
+os.environ.setdefault("FRAUD_MODEL_TYPE", "xgb")
 
 try:
-    from model.model_utils import get_model_version, model_is_loaded
+    from model.model_utils import get_model_info, get_model_version, model_is_loaded
 except ImportError:
     def model_is_loaded() -> bool:
         return False
 
     def get_model_version() -> str:
         return "v0"
+
+    def get_model_info(*, strict: bool = False):
+        return {
+            "artifact_path": "unavailable",
+            "model_loaded": False,
+            "model_version": "unavailable",
+            "model_tag": "xgb",
+            "feature_configuration": "deployment_safe",
+            "feature_count": 24,
+            "hybrid_threshold": 0.236128568649292,
+            "rule_weight": 0.6,
+            "ml_weight": 0.4,
+        }
 
 
 @lru_cache(maxsize=1)
@@ -86,9 +99,10 @@ def get_prediction_insert_statement():
         """
         INSERT INTO model_predictions_by_day (
           day_bucket, event_ts, event_id, account_id, name_dest, txn_type, amount,
-          risk_score, severity, ml_score, ml_model_version, triggered_rules,
-          is_alert, alert_id, actual_label
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          risk_score, rule_score, ml_score, hybrid_score, threshold, decision,
+          severity, ml_model_version, model_tag, feature_configuration,
+          rule_weight, ml_weight, triggered_rules, is_alert, alert_id, actual_label
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
     )
 
@@ -126,9 +140,17 @@ def persist_prediction_record(prediction) -> None:
                 prediction.txn_type,
                 prediction.amount,
                 prediction.risk_score,
-                prediction.severity,
+                prediction.rule_score,
                 prediction.ml_score,
+                prediction.hybrid_score,
+                prediction.decision_threshold,
+                "alert" if prediction.is_alert else "allow",
+                prediction.severity,
                 prediction.ml_model_version,
+                prediction.model_tag,
+                prediction.feature_configuration,
+                prediction.rule_weight,
+                prediction.ml_weight,
                 list(prediction.triggered_rules),
                 prediction.is_alert,
                 prediction.alert_id,
@@ -149,21 +171,9 @@ def publish_transaction_bundle(event: TransactionEvent) -> None:
 
     sender_update, receiver_update = derive_account_state_updates(event)
     futures = [
-        producer.send(
-            TRANSACTION_TOPIC,
-            key=event.event_id,
-            value=transaction_to_dict(event),
-        ),
-        producer.send(
-            SENDER_STATE_TOPIC,
-            key=sender_update.source_event_id,
-            value=sender_state_to_dict(sender_update),
-        ),
-        producer.send(
-            RECEIVER_STATE_TOPIC,
-            key=receiver_update.source_event_id,
-            value=receiver_state_to_dict(receiver_update),
-        ),
+        producer.send(TRANSACTION_TOPIC, key=event.event_id, value=transaction_to_dict(event)),
+        producer.send(SENDER_STATE_TOPIC, key=sender_update.source_event_id, value=sender_state_to_dict(sender_update)),
+        producer.send(RECEIVER_STATE_TOPIC, key=receiver_update.source_event_id, value=receiver_state_to_dict(receiver_update)),
     ]
     try:
         for future in futures:
@@ -176,6 +186,10 @@ def publish_transaction_bundle(event: TransactionEvent) -> None:
 def build_transaction_event_from_request(payload: ScoreRequest) -> TransactionEvent:
     event_time = payload.event_time or datetime.now(timezone.utc)
     producer_ts = payload.producer_ts or event_time
+    newbalance_orig = payload.newbalance_orig if payload.newbalance_orig is not None else max(payload.oldbalance_org - payload.amount, 0.0)
+    newbalance_dest = payload.newbalance_dest if payload.newbalance_dest is not None else payload.oldbalance_dest + payload.amount
+    hour_of_day = payload.step % 24
+    is_night_transaction = int(hour_of_day >= 22 or hour_of_day <= 6)
 
     row = {
         "step": str(payload.step),
@@ -184,10 +198,7 @@ def build_transaction_event_from_request(payload: ScoreRequest) -> TransactionEv
         "nameOrig": payload.name_orig,
         "nameDest": payload.name_dest,
         "oldbalanceOrg": str(payload.oldbalance_org),
-        "newbalanceOrig": str(payload.newbalance_orig),
         "oldbalanceDest": str(payload.oldbalance_dest),
-        "newbalanceDest": str(payload.newbalance_dest),
-        "isFraud": str(payload.is_fraud),
     }
     event_id = payload.event_id or build_event_id(row)
 
@@ -200,12 +211,14 @@ def build_transaction_event_from_request(payload: ScoreRequest) -> TransactionEv
         amount=payload.amount,
         name_orig=payload.name_orig,
         oldbalance_org=payload.oldbalance_org,
-        newbalance_orig=payload.newbalance_orig,
+        newbalance_orig=newbalance_orig,
         name_dest=payload.name_dest,
         oldbalance_dest=payload.oldbalance_dest,
-        newbalance_dest=payload.newbalance_dest,
+        newbalance_dest=newbalance_dest,
         is_fraud=payload.is_fraud,
         schema_version=payload.schema_version,
+        hour_of_day=hour_of_day,
+        is_night_transaction=is_night_transaction,
     )
 
 
@@ -218,12 +231,25 @@ def score_transaction(payload: ScoreRequest) -> ScoreResponse:
     return ScoreResponse(
         event_id=prediction.event_id,
         is_alert=prediction.is_alert,
+        decision="alert" if prediction.is_alert else "allow",
         risk_score=prediction.risk_score,
-        severity=prediction.severity,
+        rule_score=prediction.rule_score,
         ml_score=prediction.ml_score,
+        hybrid_score=prediction.hybrid_score,
+        threshold=prediction.decision_threshold,
+        severity=prediction.severity,
         ml_model_version=prediction.ml_model_version,
+        model_version=prediction.ml_model_version,
+        model_tag=prediction.model_tag,
+        feature_configuration=prediction.feature_configuration,
+        rule_weight=prediction.rule_weight,
+        ml_weight=prediction.ml_weight,
         triggered_rules=list(prediction.triggered_rules),
     )
+
+
+def model_info_payload() -> Dict[str, object]:
+    return get_model_info(strict=False)
 
 
 def health_payload() -> Dict[str, Union[str, bool]]:

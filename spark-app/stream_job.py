@@ -35,10 +35,12 @@ from fraud_pipeline import (
     window_metric_to_dict,
 )
 from fraud_pipeline.cassandra_schema import ensure_schema
+from fraud_pipeline.features import FeatureContext, credited_account
 from fraud_pipeline.kafka_rules import RuntimeRuleState, build_runtime_rule_state, load_runtime_rule_state
 from fraud_pipeline.models import TransactionEvent
 from fraud_pipeline.runtime_state import read_or_create_pipeline_run_id, scoped_query_name
 from fraud_pipeline.topics import RECEIVER_STATE_TOPIC, SENDER_STATE_TOPIC, TRANSACTION_TOPIC
+from model.model_utils import get_rule_config, model_is_loaded, refresh_model_artifact
 
 
 APP_NAME = "RealtimeFraud3StreamIntegration"
@@ -49,10 +51,11 @@ SLIDING_WINDOW = "10 minutes"
 SLIDE_INTERVAL = "5 minutes"
 BENCHMARK_EVENT_PREFIX = "bench:"
 RULE_REFRESH_SECONDS = int(os.getenv("RISK_RULE_REFRESH_SECONDS", "0"))
-CHECKPOINT_ROOT = os.path.join(os.getenv("SPARK_CHECKPOINT_ROOT", "/tmp/spark_checkpoints"), "v4_clean")
+CHECKPOINT_ROOT = os.path.join(os.getenv("SPARK_CHECKPOINT_ROOT", "/tmp/spark_checkpoints"), "v5_features")
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 STARTING_OFFSETS = os.getenv("PIPELINE_STARTING_OFFSETS", "earliest")
+MAX_OFFSETS_PER_TRIGGER = os.getenv("PIPELINE_MAX_OFFSETS_PER_TRIGGER", "10000")
 CASSANDRA_HOST = os.getenv("CASSANDRA_HOST", "cassandra")
 CASSANDRA_PORT = int(os.getenv("CASSANDRA_PORT", "9042"))
 CASSANDRA_KEYSPACE = os.getenv("CASSANDRA_KEYSPACE", "fraud_detection")
@@ -88,7 +91,19 @@ def transaction_schema() -> StructType:
             StructField("amount", DoubleType(), False),
             StructField("nameOrig", StringType(), False),
             StructField("nameDest", StringType(), False),
-            StructField("isFraud", IntegerType(), False),
+            StructField("hour_of_day", IntegerType(), True),
+            StructField("is_night_transaction", IntegerType(), True),
+            StructField("customer_account_age_days", DoubleType(), True),
+            StructField("browser", StringType(), True),
+            StructField("device_type", StringType(), True),
+            StructField("new_device_flag", IntegerType(), True),
+            StructField("billing_country", StringType(), True),
+            StructField("ip_country", StringType(), True),
+            StructField("ip_billing_distance_km", DoubleType(), True),
+            StructField("ip_billing_country_mismatch", IntegerType(), True),
+            StructField("shipping_billing_mismatch", IntegerType(), True),
+            StructField("failed_payment_attempts_24h", DoubleType(), True),
+            StructField("isFraud", IntegerType(), True),
             StructField("schema_version", IntegerType(), False),
         ]
     )
@@ -103,7 +118,7 @@ def sender_state_schema() -> StructType:
             StructField("step", IntegerType(), False),
             StructField("nameOrig", StringType(), False),
             StructField("oldbalanceOrg", DoubleType(), False),
-            StructField("newbalanceOrig", DoubleType(), False),
+            StructField("newbalanceOrig", DoubleType(), True),
         ]
     )
 
@@ -117,7 +132,7 @@ def receiver_state_schema() -> StructType:
             StructField("step", IntegerType(), False),
             StructField("nameDest", StringType(), False),
             StructField("oldbalanceDest", DoubleType(), False),
-            StructField("newbalanceDest", DoubleType(), False),
+            StructField("newbalanceDest", DoubleType(), True),
         ]
     )
 
@@ -128,6 +143,7 @@ def create_kafka_stream(spark: SparkSession, topic: str) -> DataFrame:
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS)
         .option("subscribe", topic)
         .option("startingOffsets", STARTING_OFFSETS)
+        .option("maxOffsetsPerTrigger", MAX_OFFSETS_PER_TRIGGER)
         .option("failOnDataLoss", "false")
         .load()
         .selectExpr(
@@ -221,10 +237,48 @@ def decode_json_stream(
     )
     
     # Check for negative amounts if applicable (e.g., in transactions)
-    if "amount" in [f.name for f in schema.fields]:
-        quality_condition = quality_condition & (F.col("amount") >= 0)
+    schema_field_names = {field.name for field in schema.fields}
+    if "amount" in schema_field_names:
+        quality_condition = (
+            quality_condition
+            & (F.col("amount") >= 0)
+            & (F.col("amount") <= float("1.7976931348623157e308"))
+            & ~F.isnan("amount")
+        )
+    if "schema_version" in schema_field_names:
+        quality_condition = quality_condition & (
+            F.col("schema_version") == BASE_CONFIG.schema_version
+        )
+    for binary_field in (
+        "isFraud",
+        "is_night_transaction",
+        "new_device_flag",
+        "ip_billing_country_mismatch",
+        "shipping_billing_mismatch",
+    ):
+        if binary_field in schema_field_names:
+            quality_condition = quality_condition & F.col(binary_field).isin(0, 1)
+    if "hour_of_day" in schema_field_names:
+        quality_condition = quality_condition & F.col("hour_of_day").between(0, 23)
+    for nonnegative_field in (
+        "customer_account_age_days",
+        "ip_billing_distance_km",
+        "failed_payment_attempts_24h",
+    ):
+        if nonnegative_field in schema_field_names:
+            quality_condition = (
+                quality_condition
+                & (F.col(nonnegative_field) >= 0)
+                & (F.col(nonnegative_field) <= float("1.7976931348623157e308"))
+                & ~F.isnan(nonnegative_field)
+            )
+    for category_field in ("browser", "device_type", "billing_country", "ip_country"):
+        if category_field in schema_field_names:
+            quality_condition = quality_condition & (
+                F.length(F.trim(F.col(category_field))) > 0
+            )
 
-    valid_format = projected.filter(quality_condition)
+    valid_format = projected.filter(quality_condition & ~timestamp_invalid_condition)
     quality_invalid = projected.filter(~quality_condition).select(
         "source_topic",
         "source_key",
@@ -259,6 +313,18 @@ def build_integrated_stream(
             F.col("amount").alias("tx_amount"),
             F.col("nameOrig").alias("tx_name_orig"),
             F.col("nameDest").alias("tx_name_dest"),
+            F.col("hour_of_day").alias("tx_hour_of_day"),
+            F.col("is_night_transaction").alias("tx_is_night_transaction"),
+            F.col("customer_account_age_days").alias("tx_customer_account_age_days"),
+            F.col("browser").alias("tx_browser"),
+            F.col("device_type").alias("tx_device_type"),
+            F.col("new_device_flag").alias("tx_new_device_flag"),
+            F.col("billing_country").alias("tx_billing_country"),
+            F.col("ip_country").alias("tx_ip_country"),
+            F.col("ip_billing_distance_km").alias("tx_ip_billing_distance_km"),
+            F.col("ip_billing_country_mismatch").alias("tx_ip_billing_country_mismatch"),
+            F.col("shipping_billing_mismatch").alias("tx_shipping_billing_mismatch"),
+            F.col("failed_payment_attempts_24h").alias("tx_failed_payment_attempts_24h"),
             F.col("isFraud").alias("tx_is_fraud"),
             F.col("schema_version").alias("tx_schema_version"),
         )
@@ -381,10 +447,20 @@ def build_integrated_stream(
             F.col("tx_amount").alias("amount"),
             F.col("tx_name_orig").alias("nameOrig"),
             F.col("tx_name_dest").alias("nameDest"),
+            F.col("tx_hour_of_day").alias("hour_of_day"),
+            F.col("tx_is_night_transaction").alias("is_night_transaction"),
+            F.col("tx_customer_account_age_days").alias("customer_account_age_days"),
+            F.col("tx_browser").alias("browser"),
+            F.col("tx_device_type").alias("device_type"),
+            F.col("tx_new_device_flag").alias("new_device_flag"),
+            F.col("tx_billing_country").alias("billing_country"),
+            F.col("tx_ip_country").alias("ip_country"),
+            F.col("tx_ip_billing_distance_km").alias("ip_billing_distance_km"),
+            F.col("tx_ip_billing_country_mismatch").alias("ip_billing_country_mismatch"),
+            F.col("tx_shipping_billing_mismatch").alias("shipping_billing_mismatch"),
+            F.col("tx_failed_payment_attempts_24h").alias("failed_payment_attempts_24h"),
             "oldbalanceOrg",
-            "newbalanceOrig",
             "oldbalanceDest",
-            "newbalanceDest",
             F.col("tx_is_fraud").alias("isFraud"),
             F.col("tx_schema_version").alias("schema_version"),
         )
@@ -541,17 +617,20 @@ def get_prepared_statements() -> dict[str, Any]:
             """
             INSERT INTO model_predictions_by_day (
               day_bucket, event_ts, event_id, account_id, name_dest, txn_type, amount,
-              risk_score, severity, ml_score, ml_model_version, triggered_rules,
-              is_alert, alert_id, actual_label
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              risk_score, rule_score, ml_score, hybrid_score, threshold, decision,
+              severity, ml_model_version, model_tag, feature_configuration,
+              rule_weight, ml_weight, triggered_rules, is_alert, alert_id, actual_label
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
         ),
         "insert_alert": session.prepare(
             """
             INSERT INTO alerts_by_account (
               account_id, alert_date, alert_ts, alert_id, event_id, name_dest, txn_type,
-              amount, risk_score, severity, ml_score, ml_model_version, triggered_rules
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              amount, risk_score, rule_score, ml_score, hybrid_score, threshold, decision,
+              severity, ml_model_version, model_tag, feature_configuration,
+              rule_weight, ml_weight, triggered_rules
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
         ),
         "insert_account_state": session.prepare(
@@ -716,6 +795,7 @@ def build_transaction_stub(
     template: TransactionEvent,
     event_id: str,
     event_time: datetime,
+    step: int,
     txn_type: str,
     amount: float,
     name_orig: str,
@@ -725,7 +805,7 @@ def build_transaction_stub(
         event_id=event_id,
         event_time=event_time,
         producer_ts=event_time,
-        step=template.step,
+        step=step,
         txn_type=txn_type,
         amount=amount,
         name_orig=name_orig,
@@ -739,14 +819,23 @@ def build_transaction_stub(
     )
 
 
+def runtime_state_key(kind: str, account_id: str) -> str:
+    return f"{kind}:v3:{get_pipeline_run_id()}:{account_id}"
+
+
 def load_recent_sender_events(
     redis_client: redis.Redis,
     event: TransactionEvent,
     config: PipelineConfig,
 ) -> list[TransactionEvent]:
-    history_key = f"sender_history:{event.name_orig}"
+    history_key = runtime_state_key("sender_history", event.name_orig)
     current_ts = int(event.event_time.timestamp())
-    lower_bound = current_ts - max(config.rapid_outflow_window_seconds, 3600)
+    lower_bound = current_ts - max(
+        config.rapid_outflow_window_seconds,
+        config.fan_out_window_seconds,
+        config.structuring_window_seconds,
+        3600,
+    )
     try:
         redis_client.zremrangebyscore(history_key, 0, lower_bound - 1)
         members = redis_client.zrangebyscore(history_key, lower_bound, current_ts)
@@ -763,10 +852,11 @@ def load_recent_sender_events(
                     event,
                     payload.get("event_id", f"history:{event.name_orig}:{int(event_time.timestamp())}"),
                     event_time,
+                    int(payload["step"]),
                     str(payload.get("txn_type", event.txn_type)),
                     float(payload["amount"]),
-                    event.name_orig,
-                    str(payload.get("counterparty", event.name_dest)),
+                    str(payload.get("name_orig", event.name_orig)),
+                    str(payload.get("name_dest", event.name_dest)),
                 )
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
@@ -779,7 +869,10 @@ def load_recent_receiver_events(
     event: TransactionEvent,
     config: PipelineConfig,
 ) -> list[TransactionEvent]:
-    history_key = f"receiver_history:{event.name_dest}"
+    credit_account = credited_account(event)
+    if credit_account is None:
+        return []
+    history_key = runtime_state_key("receiver_history", credit_account)
     current_ts = int(event.event_time.timestamp())
     lower_bound = current_ts - config.fan_in_window_seconds
     try:
@@ -796,12 +889,13 @@ def load_recent_receiver_events(
             history.append(
                 build_transaction_stub(
                     event,
-                    payload.get("event_id", f"history:{event.name_dest}:{int(event_time.timestamp())}"),
+                    payload.get("event_id", f"history:{credit_account}:{int(event_time.timestamp())}"),
                     event_time,
+                    int(payload["step"]),
                     str(payload.get("txn_type", event.txn_type)),
                     float(payload["amount"]),
-                    str(payload.get("counterparty", event.name_orig)),
-                    event.name_dest,
+                    str(payload.get("name_orig", event.name_orig)),
+                    str(payload.get("name_dest", event.name_dest)),
                 )
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
@@ -814,7 +908,7 @@ def load_recent_inbound_events(
     event: TransactionEvent,
     config: PipelineConfig,
 ) -> list[TransactionEvent]:
-    history_key = f"inbound_history:{event.name_orig}"
+    history_key = runtime_state_key("inbound_history", event.name_orig)
     current_ts = int(event.event_time.timestamp())
     lower_bound = current_ts - config.cashout_after_inbound_window_seconds
     try:
@@ -833,10 +927,11 @@ def load_recent_inbound_events(
                     event,
                     payload.get("event_id", f"history:inbound:{event.name_orig}:{int(event_time.timestamp())}"),
                     event_time,
+                    int(payload["step"]),
                     str(payload.get("txn_type", "TRANSFER")),
                     float(payload["amount"]),
-                    str(payload.get("counterparty", event.name_dest)),
-                    event.name_orig,
+                    str(payload.get("name_orig", event.name_dest)),
+                    str(payload.get("name_dest", event.name_orig)),
                 )
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
@@ -844,79 +939,157 @@ def load_recent_inbound_events(
     return history
 
 
-def load_known_counterparties(redis_client: redis.Redis, account_id: str) -> set[str]:
+def load_known_counterparties(
+    redis_client: redis.Redis,
+    account_id: str,
+    before_step: int,
+) -> set[str]:
     try:
-        members = redis_client.smembers(f"counterparties:{account_id}")
+        members = redis_client.zrangebyscore(
+            runtime_state_key("counterparties", account_id),
+            "-inf",
+            f"({before_step}",
+        )
     except redis.RedisError:
         return set()
     return {member.decode("utf-8") if isinstance(member, bytes) else str(member) for member in members}
 
 
+def load_last_sender_timestamp(
+    redis_client: redis.Redis,
+    event: TransactionEvent,
+) -> float | None:
+    try:
+        raw = redis_client.get(runtime_state_key("last_sender_timestamp", event.name_orig))
+    except redis.RedisError:
+        return None
+    if raw is None:
+        return None
+    try:
+        payload = json.loads(raw)
+        timestamp = float(payload["timestamp"])
+        step = int(payload["step"])
+    except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+        return None
+    return (
+        timestamp
+        if step < event.step and timestamp < event.event_time.timestamp()
+        else None
+    )
+
+
 def append_sender_history(redis_client: redis.Redis, event: TransactionEvent, config: PipelineConfig) -> None:
-    history_key = f"sender_history:{event.name_orig}"
+    del config
+    history_key = runtime_state_key("sender_history", event.name_orig)
     payload = json.dumps(
         {
             "event_id": event.event_id,
             "event_time": event.event_time.isoformat(),
+            "step": event.step,
             "txn_type": event.txn_type,
             "amount": event.amount,
-            "counterparty": event.name_dest,
+            "name_orig": event.name_orig,
+            "name_dest": event.name_dest,
         },
         ensure_ascii=False,
     )
     try:
         redis_client.zadd(history_key, {payload: int(event.event_time.timestamp())})
-        redis_client.expire(history_key, max(config.rapid_outflow_window_seconds * 6, 3600))
+        redis_client.expire(history_key, 86400 * 90)
     except redis.RedisError:
         return
 
 
 def append_receiver_history(redis_client: redis.Redis, event: TransactionEvent, config: PipelineConfig) -> None:
-    history_key = f"receiver_history:{event.name_dest}"
+    del config
+    credit_account = credited_account(event)
+    if credit_account is None:
+        return
+    history_key = runtime_state_key("receiver_history", credit_account)
     payload = json.dumps(
         {
             "event_id": event.event_id,
             "event_time": event.event_time.isoformat(),
+            "step": event.step,
             "txn_type": event.txn_type,
             "amount": event.amount,
-            "counterparty": event.name_orig,
+            "name_orig": event.name_orig,
+            "name_dest": event.name_dest,
         },
         ensure_ascii=False,
     )
     try:
         redis_client.zadd(history_key, {payload: int(event.event_time.timestamp())})
-        redis_client.expire(history_key, max(config.fan_in_window_seconds * 6, 3600))
+        redis_client.expire(history_key, 86400 * 90)
     except redis.RedisError:
         return
 
 
 def append_inbound_history(redis_client: redis.Redis, event: TransactionEvent, config: PipelineConfig) -> None:
-    if event.txn_type not in {"TRANSFER", "CASH_IN"}:
+    del config
+    credit_account = credited_account(event)
+    if credit_account is None:
         return
-    history_key = f"inbound_history:{event.name_dest}"
+    history_key = runtime_state_key("inbound_history", credit_account)
     payload = json.dumps(
         {
             "event_id": event.event_id,
             "event_time": event.event_time.isoformat(),
+            "step": event.step,
             "txn_type": event.txn_type,
             "amount": event.amount,
-            "counterparty": event.name_orig,
+            "name_orig": event.name_orig,
+            "name_dest": event.name_dest,
         },
         ensure_ascii=False,
     )
     try:
         redis_client.zadd(history_key, {payload: int(event.event_time.timestamp())})
-        redis_client.expire(history_key, max(config.cashout_after_inbound_window_seconds * 6, 3600))
+        redis_client.expire(history_key, 86400 * 90)
     except redis.RedisError:
         return
 
 
 def append_counterparty_history(redis_client: redis.Redis, event: TransactionEvent) -> None:
     try:
-        redis_client.sadd(f"counterparties:{event.name_orig}", event.name_dest)
-        redis_client.expire(f"counterparties:{event.name_orig}", 86400 * 30)
+        key = runtime_state_key("counterparties", event.name_orig)
+        existing_step = redis_client.zscore(key, event.name_dest)
+        if existing_step is None or event.step < int(existing_step):
+            redis_client.zadd(key, {event.name_dest: event.step})
+        redis_client.expire(key, 86400 * 90)
     except redis.RedisError:
         return
+
+
+def append_last_sender_timestamp(redis_client: redis.Redis, event: TransactionEvent) -> None:
+    key = runtime_state_key("last_sender_timestamp", event.name_orig)
+    timestamp = event.event_time.timestamp()
+    try:
+        raw = redis_client.get(key)
+        previous = json.loads(raw) if raw is not None else None
+        if (
+            previous is None
+            or event.step > int(previous["step"])
+            or (
+                event.step == int(previous["step"])
+                and timestamp > float(previous["timestamp"])
+            )
+        ):
+            redis_client.setex(
+                key,
+                86400 * 90,
+                json.dumps({"step": event.step, "timestamp": timestamp}),
+            )
+    except (redis.RedisError, TypeError, ValueError, KeyError, json.JSONDecodeError):
+        return
+
+
+def merge_history_events(*groups: list[TransactionEvent]) -> list[TransactionEvent]:
+    by_event_id: dict[str, TransactionEvent] = {}
+    for group in groups:
+        for event in group:
+            by_event_id[event.event_id] = event
+    return sorted(by_event_id.values(), key=lambda item: (item.event_time, item.event_id))
 
 
 def persist_transaction(event: TransactionEvent, risk_score: float) -> None:
@@ -954,9 +1127,17 @@ def persist_prediction(prediction: PredictionRecord) -> None:
             prediction.txn_type,
             prediction.amount,
             prediction.risk_score,
-            prediction.severity,
+            prediction.rule_score,
             prediction.ml_score,
+            prediction.hybrid_score,
+            prediction.decision_threshold,
+            "alert" if prediction.is_alert else "allow",
+            prediction.severity,
             prediction.ml_model_version,
+            prediction.model_tag,
+            prediction.feature_configuration,
+            prediction.rule_weight,
+            prediction.ml_weight,
             list(prediction.triggered_rules),
             prediction.is_alert,
             prediction.alert_id,
@@ -979,9 +1160,17 @@ def persist_alert(event: TransactionEvent, alert_payload: dict[str, Any]) -> Non
             event.txn_type,
             event.amount,
             alert_payload["risk_score"],
-            alert_payload["severity"],
+            alert_payload["rule_score"],
             alert_payload["ml_score"],
+            alert_payload["hybrid_score"],
+            alert_payload["threshold"],
+            alert_payload["decision"],
+            alert_payload["severity"],
             alert_payload["ml_model_version"],
+            alert_payload["model_tag"],
+            alert_payload["feature_configuration"],
+            alert_payload["rule_weight"],
+            alert_payload["ml_weight"],
             alert_payload["triggered_rules"],
         ),
     )
@@ -1088,7 +1277,16 @@ def process_integrated_batch(batch_df: DataFrame, batch_id: int, query_name: str
         return
 
     rule_state = get_runtime_rule_state_cached()
+    require_ml_artifact = os.getenv("REQUIRE_ML_ARTIFACT", "true").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    refresh_model_artifact(strict=require_ml_artifact)
     config = config_from_rule_state(rule_state)
+    frozen_rule_config = get_rule_config()
+    if frozen_rule_config:
+        config = replace(config, **frozen_rule_config)
     engine = RuleEngine(config)
     producer = get_kafka_producer()
     watchlisted_accounts = set(rule_state.watchlisted_accounts)
@@ -1096,59 +1294,131 @@ def process_integrated_batch(batch_df: DataFrame, batch_id: int, query_name: str
     in_batch_receiver_history: dict[str, list[TransactionEvent]] = {}
     in_batch_inbound_history: dict[str, list[TransactionEvent]] = {}
     in_batch_counterparties: dict[str, set[str]] = {}
+    in_batch_last_sender_timestamp: dict[str, tuple[int, float]] = {}
     processed_count = 0
     alert_count = 0
 
-    ordered_batch = batch_df.orderBy("event_time")
-    for row in ordered_batch.toLocalIterator():
-        payload = row.asDict(recursive=True)
-        event = integrated_payload_to_transaction_event(payload)
-        benchmark_run_id = extract_benchmark_run_id(event.event_id)
-        spark_seen_at = datetime.now(timezone.utc)
-        recent = load_recent_sender_events(get_redis_client(), event, config)
-        recent.extend(in_batch_sender_history.get(event.name_orig, []))
-        receiver_recent = load_recent_receiver_events(get_redis_client(), event, config)
-        receiver_recent.extend(in_batch_receiver_history.get(event.name_dest, []))
-        inbound_recent = load_recent_inbound_events(get_redis_client(), event, config)
-        inbound_recent.extend(in_batch_inbound_history.get(event.name_orig, []))
-        known_counterparties = load_known_counterparties(get_redis_client(), event.name_orig)
-        known_counterparties.update(in_batch_counterparties.get(event.name_orig, set()))
-        decision = engine.evaluate(
-            event,
-            recent_sender_events=recent,
-            recent_receiver_events=receiver_recent,
-            recent_inbound_events=inbound_recent,
-            known_counterparties=known_counterparties,
-            watchlisted_accounts=watchlisted_accounts,
-        )
-        prediction = prediction_record_from_decision(event, decision)
-        persist_transaction(event, decision.risk_score)
-        persist_prediction(prediction)
-        persist_account_states(event)
-        if decision.is_alert:
-            alert_payload = fraud_decision_to_dict(event, decision)
-            persist_alert(event, alert_payload)
-            publish_alert_once(event.event_id, alert_payload)
-            cache_alert_payload(event.event_id, alert_payload)
-            alert_count += 1
-        append_sender_history(get_redis_client(), event, config)
-        append_receiver_history(get_redis_client(), event, config)
-        append_inbound_history(get_redis_client(), event, config)
-        append_counterparty_history(get_redis_client(), event)
-        cassandra_persisted_at = datetime.now(timezone.utc)
-        if benchmark_run_id:
-            persist_benchmark_stage_timing(
-                benchmark_run_id=str(benchmark_run_id),
-                event_id=event.event_id,
-                spark_seen_at=spark_seen_at,
-                cassandra_persisted_at=cassandra_persisted_at,
+    def process_step_group(events: list[TransactionEvent]) -> tuple[int, int]:
+        if not events:
+            return 0, 0
+        evaluated = []
+        redis_client = get_redis_client()
+        for event in events:
+            credit_account = credited_account(event)
+            recent = merge_history_events(
+                load_recent_sender_events(redis_client, event, config),
+                in_batch_sender_history.get(event.name_orig, []),
             )
-        in_batch_sender_history.setdefault(event.name_orig, []).append(event)
-        in_batch_receiver_history.setdefault(event.name_dest, []).append(event)
-        if event.txn_type in {"TRANSFER", "CASH_IN"}:
-            in_batch_inbound_history.setdefault(event.name_dest, []).append(event)
-        in_batch_counterparties.setdefault(event.name_orig, set()).add(event.name_dest)
-        processed_count += 1
+            receiver_recent = merge_history_events(
+                load_recent_receiver_events(redis_client, event, config),
+                in_batch_receiver_history.get(credit_account, [])
+                if credit_account is not None
+                else [],
+            )
+            inbound_recent = merge_history_events(
+                load_recent_inbound_events(redis_client, event, config),
+                in_batch_inbound_history.get(event.name_orig, []),
+            )
+            known_counterparties = load_known_counterparties(
+                redis_client,
+                event.name_orig,
+                event.step,
+            )
+            known_counterparties.update(
+                in_batch_counterparties.get(event.name_orig, set())
+            )
+            persisted_last = load_last_sender_timestamp(redis_client, event)
+            in_batch_last_state = in_batch_last_sender_timestamp.get(event.name_orig)
+            in_batch_last = (
+                in_batch_last_state[1]
+                if in_batch_last_state is not None
+                and in_batch_last_state[0] < event.step
+                else None
+            )
+            prior_timestamps = [
+                value
+                for value in (persisted_last, in_batch_last)
+                if value is not None and value < event.event_time.timestamp()
+            ]
+            context = FeatureContext(
+                recent_sender_events=recent,
+                recent_receiver_events=receiver_recent,
+                recent_inbound_events=inbound_recent,
+                known_counterparties=known_counterparties,
+                last_sender_timestamp=max(prior_timestamps)
+                if prior_timestamps
+                else None,
+            )
+            decision = engine.evaluate(
+                event,
+                context=context,
+                watchlisted_accounts=watchlisted_accounts,
+            )
+            evaluated.append((event, decision, datetime.now(timezone.utc)))
+
+        group_alerts = 0
+        for event, decision, spark_seen_at in evaluated:
+            benchmark_run_id = extract_benchmark_run_id(event.event_id)
+            persist_transaction(event, decision.risk_score)
+            persist_account_states(event)
+            if decision.is_alert:
+                alert_payload = fraud_decision_to_dict(event, decision)
+                persist_alert(event, alert_payload)
+                publish_alert_once(event.event_id, alert_payload)
+                cache_alert_payload(event.event_id, alert_payload)
+                group_alerts += 1
+            append_sender_history(redis_client, event, config)
+            append_receiver_history(redis_client, event, config)
+            append_inbound_history(redis_client, event, config)
+            append_counterparty_history(redis_client, event)
+            append_last_sender_timestamp(redis_client, event)
+            cassandra_persisted_at = datetime.now(timezone.utc)
+            if benchmark_run_id:
+                persist_benchmark_stage_timing(
+                    benchmark_run_id=str(benchmark_run_id),
+                    event_id=event.event_id,
+                    spark_seen_at=spark_seen_at,
+                    cassandra_persisted_at=cassandra_persisted_at,
+                )
+
+        # State becomes visible only after every event in this PaySim step was scored.
+        for event, _, _ in evaluated:
+            in_batch_sender_history.setdefault(event.name_orig, []).append(event)
+            credit_account = credited_account(event)
+            if credit_account is not None:
+                in_batch_receiver_history.setdefault(credit_account, []).append(event)
+                in_batch_inbound_history.setdefault(credit_account, []).append(event)
+            in_batch_counterparties.setdefault(event.name_orig, set()).add(
+                event.name_dest
+            )
+            timestamp = event.event_time.timestamp()
+            previous = in_batch_last_sender_timestamp.get(event.name_orig)
+            if (
+                previous is None
+                or event.step > previous[0]
+                or (event.step == previous[0] and timestamp > previous[1])
+            ):
+                in_batch_last_sender_timestamp[event.name_orig] = (
+                    event.step,
+                    timestamp,
+                )
+        return len(evaluated), group_alerts
+
+    ordered_batch = batch_df.orderBy("step", "event_id")
+    current_step: int | None = None
+    step_events: list[TransactionEvent] = []
+    for row in ordered_batch.toLocalIterator():
+        event = integrated_payload_to_transaction_event(row.asDict(recursive=True))
+        if current_step is not None and event.step != current_step:
+            group_processed, group_alerts = process_step_group(step_events)
+            processed_count += group_processed
+            alert_count += group_alerts
+            step_events = []
+        current_step = event.step
+        step_events.append(event)
+    group_processed, group_alerts = process_step_group(step_events)
+    processed_count += group_processed
+    alert_count += group_alerts
 
     producer.flush()
     mark_batch_processed(query_name, batch_id)
@@ -1208,6 +1478,16 @@ def start_query(
 
 
 def main() -> None:
+    require_ml_artifact = os.getenv("REQUIRE_ML_ARTIFACT", "true").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if require_ml_artifact and not model_is_loaded():
+        raise RuntimeError(
+            "REQUIRE_ML_ARTIFACT is enabled but the selected atomic model artifact "
+            "could not be loaded"
+        )
     ensure_schema(CASSANDRA_HOST, CASSANDRA_PORT, CASSANDRA_KEYSPACE)
     get_pipeline_run_id()
     warm_rule_state_cache()
@@ -1226,7 +1506,19 @@ def main() -> None:
             "amount",
             "nameOrig",
             "nameDest",
-            "isFraud",
+            "hour_of_day",
+            "is_night_transaction",
+            "customer_account_age_days",
+            "browser",
+            "device_type",
+            "new_device_flag",
+            "billing_country",
+            "ip_country",
+            "ip_billing_distance_km",
+            "ip_billing_country_mismatch",
+            "shipping_billing_mismatch",
+            "failed_payment_attempts_24h",
+            "schema_version",
         ],
         timestamp_fields=["event_time", "producer_ts"],
     )
@@ -1240,7 +1532,6 @@ def main() -> None:
             "step",
             "nameOrig",
             "oldbalanceOrg",
-            "newbalanceOrig",
         ],
         timestamp_fields=["event_time"],
     )
@@ -1254,7 +1545,6 @@ def main() -> None:
             "step",
             "nameDest",
             "oldbalanceDest",
-            "newbalanceDest",
         ],
         timestamp_fields=["event_time"],
     )
@@ -1298,3 +1588,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
+

@@ -157,7 +157,7 @@ def build_drift_summary(reference_df: pd.DataFrame, serving_df: pd.DataFrame) ->
 
     drifted_features = [name for name, details in features.items() if details.get("drift_detected")]
     return {
-        "generated_at": pd.Timestamp.utcnow().isoformat(),
+        "generated_at": pd.Timestamp.now("UTC").isoformat(),
         "reference_rows": int(len(reference_df)),
         "serving_rows": int(len(serving_df)),
         "monitored_features": list(features.keys()),

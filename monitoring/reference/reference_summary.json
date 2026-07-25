@@ -1,7 +1,7 @@
 {
   "source_csv": "D:\\Code\\Pipeline_Financial_Fraud_Detection\\model\\test_set.csv",
   "sample_rows": 5000,
-  "generated_at": "2026-07-22T14:08:06.589928+00:00",
+  "generated_at": "2026-07-24T17:26:43.377169+00:00",
   "columns": [
     "event_id",
     "step",
@@ -15,18 +15,18 @@
   ],
   "numeric_summary": {
     "amount": {
-      "mean": 179181.41492,
-      "std": 979716.107868,
+      "mean": 179181.414896,
+      "std": 979716.111873,
       "min": 12.44,
-      "max": 60965275.64
+      "max": 60965276.0
     },
     "risk_score": {
-      "mean": 0.591789,
-      "std": 0.489001
+      "mean": 0.018756,
+      "std": 0.063118
     },
     "ml_score": {
-      "mean": 1513.259351,
-      "std": 29002.860139
+      "mean": 0.006195,
+      "std": 0.061091
     }
   },
   "categorical_summary": {
@@ -38,11 +38,11 @@
       "TRANSFER": 0.079
     },
     "severity": {
-      "high": 0.5896,
-      "low": 0.4062,
-      "medium": 0.0042
+      "high": 0.0008,
+      "low": 0.996,
+      "medium": 0.0032
     }
   },
-  "alert_rate": 0.5954,
+  "alert_rate": 0.0204,
   "fraud_label_rate": 0.0016
 }

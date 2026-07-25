@@ -31,11 +31,23 @@ class ParsingTests(unittest.TestCase):
         self.assertTrue(event.event_id)
         self.assertTrue(event.event_time.isoformat().startswith("2026-01-01T00:01:00"))
 
-    def test_parse_csv_row_event_id_changes_when_balances_change(self) -> None:
+    def test_parse_csv_row_event_id_ignores_post_transaction_balances(self) -> None:
         first = parse_csv_row(sample_row())
-        second = parse_csv_row(sample_row(newbalanceDest="5.0"))
+        second = parse_csv_row(sample_row(newbalanceDest="5.0", newbalanceOrig="5.0"))
+
+        self.assertEqual(first.event_id, second.event_id)
+
+    def test_parse_csv_row_event_id_changes_when_inference_balance_changes(self) -> None:
+        first = parse_csv_row(sample_row())
+        second = parse_csv_row(sample_row(oldbalanceDest="5.0"))
 
         self.assertNotEqual(first.event_id, second.event_id)
+
+    def test_event_id_does_not_depend_on_fraud_label(self) -> None:
+        legitimate = parse_csv_row(sample_row(isFraud="0"))
+        fraudulent = parse_csv_row(sample_row(isFraud="1"))
+
+        self.assertEqual(legitimate.event_id, fraudulent.event_id)
 
     def test_derive_account_state_updates_returns_sender_and_receiver(self) -> None:
         event = parse_csv_row(sample_row())

@@ -23,6 +23,18 @@ TRANSACTION_SOURCE_FIELDS = [
     "amount",
     "nameOrig",
     "nameDest",
+    "hour_of_day",
+    "is_night_transaction",
+    "customer_account_age_days",
+    "browser",
+    "device_type",
+    "new_device_flag",
+    "billing_country",
+    "ip_country",
+    "ip_billing_distance_km",
+    "ip_billing_country_mismatch",
+    "shipping_billing_mismatch",
+    "failed_payment_attempts_24h",
     "isFraud",
     "schema_version",
 ]
@@ -111,15 +123,32 @@ def _iter_csv_rows(csv_path: str | Path, limit: int | None = None) -> Iterator[d
 
 
 def load_transaction_source_row(row: dict[str, str]) -> dict[str, Any]:
+    step = int(row["step"])
+    hour = int(row.get("hour_of_day") or step % 24)
     return {
         "event_id": row["event_id"],
         "event_time": row["event_time"],
         "producer_ts": row["producer_ts"],
-        "step": int(row["step"]),
+        "step": step,
         "type": row["type"],
         "amount": float(row["amount"]),
         "nameOrig": row["nameOrig"],
         "nameDest": row["nameDest"],
+        "hour_of_day": hour,
+        "is_night_transaction": int(
+            row.get("is_night_transaction")
+            or int(hour >= 22 or hour <= 6)
+        ),
+        "customer_account_age_days": float(row.get("customer_account_age_days") or 0.0),
+        "browser": row.get("browser") or "unknown",
+        "device_type": row.get("device_type") or "unknown",
+        "new_device_flag": int(row.get("new_device_flag") or 0),
+        "billing_country": row.get("billing_country") or "unknown",
+        "ip_country": row.get("ip_country") or "unknown",
+        "ip_billing_distance_km": float(row.get("ip_billing_distance_km") or 0.0),
+        "ip_billing_country_mismatch": int(row.get("ip_billing_country_mismatch") or 0),
+        "shipping_billing_mismatch": int(row.get("shipping_billing_mismatch") or 0),
+        "failed_payment_attempts_24h": float(row.get("failed_payment_attempts_24h") or 0.0),
         "isFraud": int(row["isFraud"]),
         "schema_version": int(row.get("schema_version", "1")),
     }

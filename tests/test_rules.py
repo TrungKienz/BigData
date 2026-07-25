@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from fraud_pipeline import PipelineConfig, RuleEngine, parse_csv_row
 
@@ -20,7 +21,25 @@ def sample_row(**overrides: str) -> dict[str, str]:
     return row
 
 
+def parse_test_row(**overrides: str):
+    return parse_csv_row(
+        sample_row(**overrides), config=PipelineConfig(step_seconds=60)
+    )
+
+
 class RuleEngineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.patchers = [
+            patch("model.model_utils.get_scoring_config", return_value={"rule_weight": 0.6, "ml_weight": 0.4, "hybrid_threshold": 0.236128568649292}),
+            patch("model.model_utils.get_model_info", return_value={"model_version": "test-xgb", "model_tag": "xgb", "feature_configuration": "deployment_safe"}),
+            patch("model.model_utils.predict_proba", return_value=0.0),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+
+    def tearDown(self) -> None:
+        for patcher in reversed(self.patchers):
+            patcher.stop()
     def test_account_drain_near_zero_triggers_alert(self) -> None:
         engine = RuleEngine(
             PipelineConfig(
@@ -29,7 +48,11 @@ class RuleEngineTests(unittest.TestCase):
                 account_drain_near_zero_balance=1_000.0,
             )
         )
-        event = parse_csv_row(sample_row(amount="260000.0", oldbalanceOrg="300000.0", newbalanceOrig="100.0"))
+        event = parse_test_row(
+            amount="299900.0",
+            oldbalanceOrg="300000.0",
+            newbalanceOrig="100.0",
+        )
 
         decision = engine.evaluate(event)
 
@@ -51,11 +74,11 @@ class RuleEngineTests(unittest.TestCase):
             )
         )
         history = [
-            parse_csv_row(sample_row(step="1", amount="60000.0", nameDest="C2", oldbalanceOrg="500000.0", newbalanceOrig="440000.0")),
-            parse_csv_row(sample_row(step="2", amount="55000.0", nameDest="C3", oldbalanceOrg="440000.0", newbalanceOrig="385000.0")),
-            parse_csv_row(sample_row(step="3", amount="50000.0", nameDest="C4", oldbalanceOrg="385000.0", newbalanceOrig="335000.0")),
+            parse_test_row(step="1", amount="60000.0", nameDest="C2", oldbalanceOrg="500000.0", newbalanceOrig="440000.0"),
+            parse_test_row(step="2", amount="55000.0", nameDest="C3", oldbalanceOrg="440000.0", newbalanceOrig="385000.0"),
+            parse_test_row(step="3", amount="50000.0", nameDest="C4", oldbalanceOrg="385000.0", newbalanceOrig="335000.0"),
         ]
-        event = parse_csv_row(sample_row(step="4", amount="70000.0", nameDest="C5", oldbalanceOrg="335000.0", newbalanceOrig="265000.0"))
+        event = parse_test_row(step="4", amount="70000.0", nameDest="C5", oldbalanceOrg="335000.0", newbalanceOrig="265000.0")
 
         decision = engine.evaluate(event, recent_sender_events=history)
 
@@ -70,9 +93,9 @@ class RuleEngineTests(unittest.TestCase):
             fan_in_total_amount_threshold=200_000.0,
         )
         engine = RuleEngine(config)
-        first = parse_csv_row(sample_row(step="1", amount="70000.0", nameOrig="S1", nameDest="C9"))
-        second = parse_csv_row(sample_row(step="2", amount="80000.0", nameOrig="S2", nameDest="C9"))
-        current = parse_csv_row(sample_row(step="3", amount="90000.0", nameOrig="S3", nameDest="C9"))
+        first = parse_test_row(step="1", amount="70000.0", nameOrig="S1", nameDest="C9")
+        second = parse_test_row(step="2", amount="80000.0", nameOrig="S2", nameDest="C9")
+        current = parse_test_row(step="3", amount="90000.0", nameOrig="S3", nameDest="C9")
 
         decision = engine.evaluate(current, recent_receiver_events=[first, second])
 
@@ -80,7 +103,7 @@ class RuleEngineTests(unittest.TestCase):
 
     def test_new_counterparty_large_transfer_triggers_alert(self) -> None:
         engine = RuleEngine(PipelineConfig(new_counterparty_amount_threshold=150_000.0))
-        event = parse_csv_row(sample_row(amount="200000.0", nameDest="C999"))
+        event = parse_test_row(amount="200000.0", nameDest="C999")
 
         decision = engine.evaluate(event, known_counterparties={"C2", "C3"})
 
@@ -94,27 +117,23 @@ class RuleEngineTests(unittest.TestCase):
                 new_counterparty_amount_threshold=999_999.0,
             )
         )
-        inbound = parse_csv_row(
-            sample_row(
-                step="1",
-                type="TRANSFER",
-                amount="120000.0",
-                nameOrig="UPSTREAM",
-                nameDest="C1",
-                oldbalanceDest="1000.0",
-                newbalanceDest="121000.0",
-            )
+        inbound = parse_test_row(
+            step="1",
+            type="TRANSFER",
+            amount="120000.0",
+            nameOrig="UPSTREAM",
+            nameDest="C1",
+            oldbalanceDest="1000.0",
+            newbalanceDest="121000.0",
         )
-        cashout = parse_csv_row(
-            sample_row(
-                step="2",
-                type="CASH_OUT",
-                amount="100000.0",
-                nameOrig="C1",
-                nameDest="MERCHANT",
-                oldbalanceOrg="121000.0",
-                newbalanceOrig="21000.0",
-            )
+        cashout = parse_test_row(
+            step="2",
+            type="CASH_OUT",
+            amount="100000.0",
+            nameOrig="C1",
+            nameDest="MERCHANT",
+            oldbalanceOrg="121000.0",
+            newbalanceOrig="21000.0",
         )
 
         decision = engine.evaluate(cashout, recent_inbound_events=[inbound])
@@ -124,3 +143,5 @@ class RuleEngineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+

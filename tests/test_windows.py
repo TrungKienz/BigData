@@ -1,6 +1,6 @@
 import unittest
 
-from fraud_pipeline import parse_csv_row, sliding_window_metrics, tumbling_window_metrics
+from fraud_pipeline import PipelineConfig, parse_csv_row, sliding_window_metrics, tumbling_window_metrics
 
 
 def sample_event(step: int, amount: float, is_fraud: int) -> dict[str, str]:
@@ -20,10 +20,11 @@ def sample_event(step: int, amount: float, is_fraud: int) -> dict[str, str]:
 
 class WindowMetricTests(unittest.TestCase):
     def test_tumbling_window_metrics_groups_events(self) -> None:
+        config = PipelineConfig(step_seconds=60)
         events = [
-            parse_csv_row(sample_event(1, 100.0, 0)),
-            parse_csv_row(sample_event(1, 200.0, 1)),
-            parse_csv_row(sample_event(2, 300.0, 0)),
+            parse_csv_row(sample_event(1, 100.0, 0), config=config),
+            parse_csv_row(sample_event(1, 200.0, 1), config=config),
+            parse_csv_row(sample_event(2, 300.0, 0), config=config),
         ]
 
         metrics = tumbling_window_metrics(events, window_seconds=60)
@@ -34,10 +35,11 @@ class WindowMetricTests(unittest.TestCase):
         self.assertEqual(metrics[1].total_amount, 300.0)
 
     def test_sliding_window_metrics_accumulates_overlapping_windows(self) -> None:
+        config = PipelineConfig(step_seconds=60)
         events = [
-            parse_csv_row(sample_event(1, 100.0, 0)),
-            parse_csv_row(sample_event(2, 150.0, 0)),
-            parse_csv_row(sample_event(3, 200.0, 1)),
+            parse_csv_row(sample_event(1, 100.0, 0), config=config),
+            parse_csv_row(sample_event(2, 150.0, 0), config=config),
+            parse_csv_row(sample_event(3, 200.0, 1), config=config),
         ]
 
         metrics = sliding_window_metrics(events, window_seconds=180, slide_seconds=60)

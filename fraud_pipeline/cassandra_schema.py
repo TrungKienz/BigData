@@ -3,6 +3,26 @@ from __future__ import annotations
 from cassandra.cluster import Cluster
 
 
+HYBRID_METADATA_COLUMNS = (
+    "rule_score double",
+    "hybrid_score double",
+    "threshold double",
+    "decision text",
+    "model_tag text",
+    "feature_configuration text",
+    "rule_weight double",
+    "ml_weight double",
+)
+
+
+def _ensure_columns(session, table: str) -> None:
+    for column in ("ml_score double", "ml_model_version text", *HYBRID_METADATA_COLUMNS):
+        try:
+            session.execute(f"ALTER TABLE {table} ADD {column}")
+        except Exception:
+            pass
+
+
 def ensure_schema(host: str = "localhost", port: int = 9042, keyspace: str = "fraud_detection") -> None:
     cluster = Cluster([host], port=port)
     session = cluster.connect()
@@ -26,20 +46,23 @@ def ensure_schema(host: str = "localhost", port: int = 9042, keyspace: str = "fr
               txn_type text,
               amount double,
               risk_score double,
-              severity text,
+              rule_score double,
               ml_score double,
+              hybrid_score double,
+              threshold double,
+              decision text,
+              severity text,
               ml_model_version text,
+              model_tag text,
+              feature_configuration text,
+              rule_weight double,
+              ml_weight double,
               triggered_rules list<text>,
               PRIMARY KEY ((account_id, alert_date), alert_ts, alert_id)
             ) WITH CLUSTERING ORDER BY (alert_ts DESC)
             """
         )
-        # Ensure new columns exist for existing tables
-        try:
-            session.execute("ALTER TABLE alerts_by_account ADD ml_score double")
-            session.execute("ALTER TABLE alerts_by_account ADD ml_model_version text")
-        except Exception:
-            pass
+        _ensure_columns(session, "alerts_by_account")
         session.execute(
             """
             CREATE TABLE IF NOT EXISTS transactions_by_day (
@@ -71,9 +94,17 @@ def ensure_schema(host: str = "localhost", port: int = 9042, keyspace: str = "fr
               txn_type text,
               amount double,
               risk_score double,
-              severity text,
+              rule_score double,
               ml_score double,
+              hybrid_score double,
+              threshold double,
+              decision text,
+              severity text,
               ml_model_version text,
+              model_tag text,
+              feature_configuration text,
+              rule_weight double,
+              ml_weight double,
               triggered_rules list<text>,
               is_alert boolean,
               alert_id text,
@@ -82,6 +113,7 @@ def ensure_schema(host: str = "localhost", port: int = 9042, keyspace: str = "fr
             ) WITH CLUSTERING ORDER BY (event_ts DESC)
             """
         )
+        _ensure_columns(session, "model_predictions_by_day")
         session.execute(
             """
             CREATE TABLE IF NOT EXISTS alert_reviews (

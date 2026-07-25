@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from fraud_pipeline import (
     PipelineConfig,
@@ -30,6 +31,18 @@ def sample_row(**overrides: str) -> dict[str, str]:
 
 
 class SerializationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.patchers = [
+            patch("model.model_utils.get_scoring_config", return_value={"rule_weight": 0.6, "ml_weight": 0.4, "hybrid_threshold": 0.236128568649292}),
+            patch("model.model_utils.get_model_info", return_value={"model_version": "test-xgb", "model_tag": "xgb", "feature_configuration": "deployment_safe"}),
+            patch("model.model_utils.predict_proba", return_value=0.0),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+
+    def tearDown(self) -> None:
+        for patcher in reversed(self.patchers):
+            patcher.stop()
     def test_sender_state_payload_contains_correlation_key(self) -> None:
         event = parse_csv_row(sample_row())
         sender_update = derive_account_state_updates(event)[0]
@@ -67,3 +80,5 @@ class SerializationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+

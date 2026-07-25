@@ -1,5 +1,9 @@
 Data/*.zip
 Data/**/*.csv
+Data/**/*.parquet
+data/**/*.parquet
+model/artifacts/*
+!model/artifacts/.gitkeep
 **/__pycache__/
 *.pyc
 .venv/
