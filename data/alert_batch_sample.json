@@ -7,8 +7,7 @@
       "nameOrig": "C1000000001",
       "oldbalanceOrg": 200000,
       "nameDest": "C2000000001",
-      "oldbalanceDest": 0,
-      "isFraud": 1
+      "oldbalanceDest": 0
     },
     {
       "step": 2,
@@ -17,8 +16,7 @@
       "nameOrig": "C1000000002",
       "oldbalanceOrg": 250000,
       "nameDest": "C2000000002",
-      "oldbalanceDest": 0,
-      "isFraud": 1
+      "oldbalanceDest": 0
     },
     {
       "step": 3,
@@ -27,8 +25,7 @@
       "nameOrig": "C1000000003",
       "oldbalanceOrg": 180000,
       "nameDest": "C2000000003",
-      "oldbalanceDest": 0,
-      "isFraud": 1
+      "oldbalanceDest": 0
     },
     {
       "step": 4,
@@ -37,8 +34,7 @@
       "nameOrig": "C1000000004",
       "oldbalanceOrg": 500000,
       "nameDest": "C2000000004",
-      "oldbalanceDest": 0,
-      "isFraud": 1
+      "oldbalanceDest": 0
     },
     {
       "step": 5,
@@ -47,8 +43,7 @@
       "nameOrig": "C1000000005",
       "oldbalanceOrg": 160000,
       "nameDest": "C2000000005",
-      "oldbalanceDest": 0,
-      "isFraud": 1
+      "oldbalanceDest": 0
     },
     {
       "step": 6,
@@ -57,8 +52,7 @@
       "nameOrig": "C1000000006",
       "oldbalanceOrg": 1000000,
       "nameDest": "C2000000006",
-      "oldbalanceDest": 0,
-      "isFraud": 1
+      "oldbalanceDest": 0
     },
     {
       "step": 7,
@@ -67,8 +61,7 @@
       "nameOrig": "C1000000007",
       "oldbalanceOrg": 300000,
       "nameDest": "C2000000007",
-      "oldbalanceDest": 0,
-      "isFraud": 1
+      "oldbalanceDest": 0
     },
     {
       "step": 8,
@@ -77,8 +70,7 @@
       "nameOrig": "C1000000008",
       "oldbalanceOrg": 220000,
       "nameDest": "C2000000008",
-      "oldbalanceDest": 0,
-      "isFraud": 1
+      "oldbalanceDest": 0
     },
     {
       "step": 9,
@@ -87,8 +79,7 @@
       "nameOrig": "C1000000009",
       "oldbalanceOrg": 155000,
       "nameDest": "C2000000009",
-      "oldbalanceDest": 0,
-      "isFraud": 1
+      "oldbalanceDest": 0
     },
     {
       "step": 10,
@@ -97,8 +88,7 @@
       "nameOrig": "C1000000010",
       "oldbalanceOrg": 750000,
       "nameDest": "C2000000010",
-      "oldbalanceDest": 0,
-      "isFraud": 1
+      "oldbalanceDest": 0
     }
   ]
 }

@@ -179,6 +179,7 @@ Hệ thống được module hóa để dễ dàng bảo trì và mở rộng:
 - `monitoring/model/drift_report.py`: Sinh drift report JSON/HTML từ serving data.
 - `monitoring/model/performance_report.py`: Tính rolling precision/recall/F1 từ predictions và analyst reviews.
 - `monitoring/model/check_retraining_trigger.py`: Đánh giá có cần retrain theo policy hay không.
+- Chi tiết các chỉ số monitoring: [`docs/MODEL_MONITORING_METRICS.md`](docs/MODEL_MONITORING_METRICS.md).
 
 ### 4.6. Sơ đồ hạ tầng Docker (Deployment)
 

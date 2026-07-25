@@ -1,66 +1,67 @@
 {
-  "generated_at": "2026-07-22T14:08:36.943932+00:00",
-  "prediction_rows": 7,
-  "review_rows": 0,
-  "labeled_rows": 0,
-  "unlabeled_rows": 7,
-  "label_coverage": 0.0,
+  "generated_at": "2026-07-25T02:38:07.323134+00:00",
+  "prediction_rows": 8000,
+  "review_rows": 114,
+  "labeled_rows": 103,
+  "unlabeled_rows": 7897,
+  "label_coverage": 0.012875,
   "label_source_breakdown": {
-    "unlabeled": 7
+    "unlabeled": 7897,
+    "review_label": 103
   },
   "overall": {
-    "labeled_rows": 0,
-    "tp": 0,
-    "fp": 0,
+    "labeled_rows": 103,
+    "tp": 76,
+    "fp": 27,
     "tn": 0,
     "fn": 0,
-    "precision": null,
-    "recall": null,
-    "f1": null,
-    "false_positive_rate": null
+    "precision": 0.737864,
+    "recall": 1.0,
+    "f1": 0.849162,
+    "false_positive_rate": 1.0
   },
   "rolling_windows": {
     "1d": {
-      "labeled_rows": 0,
-      "tp": 0,
-      "fp": 0,
+      "labeled_rows": 103,
+      "tp": 76,
+      "fp": 27,
       "tn": 0,
       "fn": 0,
-      "precision": null,
-      "recall": null,
-      "f1": null,
-      "false_positive_rate": null,
-      "window_start": "2026-07-21T11:40:20",
-      "window_end": "2026-07-22T11:40:20"
+      "precision": 0.737864,
+      "recall": 1.0,
+      "f1": 0.849162,
+      "false_positive_rate": 1.0,
+      "window_start": "2026-07-24T02:36:27.975000",
+      "window_end": "2026-07-25T02:36:27.975000"
     },
     "7d": {
-      "labeled_rows": 0,
-      "tp": 0,
-      "fp": 0,
+      "labeled_rows": 103,
+      "tp": 76,
+      "fp": 27,
       "tn": 0,
       "fn": 0,
-      "precision": null,
-      "recall": null,
-      "f1": null,
-      "false_positive_rate": null,
-      "window_start": "2026-07-15T11:40:20",
-      "window_end": "2026-07-22T11:40:20"
+      "precision": 0.737864,
+      "recall": 1.0,
+      "f1": 0.849162,
+      "false_positive_rate": 1.0,
+      "window_start": "2026-07-18T02:36:27.975000",
+      "window_end": "2026-07-25T02:36:27.975000"
     },
     "30d": {
-      "labeled_rows": 0,
-      "tp": 0,
-      "fp": 0,
+      "labeled_rows": 103,
+      "tp": 76,
+      "fp": 27,
       "tn": 0,
       "fn": 0,
-      "precision": null,
-      "recall": null,
-      "f1": null,
-      "false_positive_rate": null,
-      "window_start": "2026-06-22T11:40:20",
-      "window_end": "2026-07-22T11:40:20"
+      "precision": 0.737864,
+      "recall": 1.0,
+      "f1": 0.849162,
+      "false_positive_rate": 1.0,
+      "window_start": "2026-06-25T02:36:27.975000",
+      "window_end": "2026-07-25T02:36:27.975000"
     }
   },
   "warnings": [
-    "No labeled predictions available yet. Precision/recall cannot represent production quality."
+    "No labeled negative predictions found. Recall may be optimistic because false negatives are not yet observable from reviewed alerts alone."
   ]
 }

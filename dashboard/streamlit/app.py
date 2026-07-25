@@ -321,7 +321,7 @@ def render_live_alerts(alerts_df: pd.DataFrame, severity_filter: list[str]) -> N
 
 
 def render_review_queue(queue_df: pd.DataFrame) -> None:
-    st.subheader("🧑‍💼 Fraud Analyst Review Queue")
+    st.subheader("Fraud Analyst Review Queue")
     col1, col2, col3 = st.columns(3)
     with col1:
         queue_status_filter = st.multiselect(
@@ -430,7 +430,7 @@ def render_review_queue(queue_df: pd.DataFrame) -> None:
 
 
 def render_case_details(queue_df: pd.DataFrame) -> None:
-    st.subheader("🗂️ Case Details")
+    st.subheader("Case Details")
     event_options = queue_df["event_id"].tolist()
     if not event_options:
         st.info("No alert details available.")
@@ -491,7 +491,7 @@ def render_case_details(queue_df: pd.DataFrame) -> None:
 
 
 def render_monitoring_tab(queue_df: pd.DataFrame) -> None:
-    st.subheader("📡 Model Monitoring Dashboard")
+    st.subheader("Model Monitoring Dashboard")
     drift_report = load_report("drift_report.json")
     performance_report = load_report("performance_report.json")
     retraining_report = load_report("retraining_decision.json")

@@ -80,7 +80,7 @@ def summarize_reference(df: pd.DataFrame, input_csv: Path) -> dict[str, Any]:
     return {
         "source_csv": str(input_csv),
         "sample_rows": int(len(df)),
-        "generated_at": pd.Timestamp.utcnow().isoformat(),
+        "generated_at": pd.Timestamp.now("UTC").isoformat(),
         "columns": list(df.columns),
         "numeric_summary": {
             "amount": {

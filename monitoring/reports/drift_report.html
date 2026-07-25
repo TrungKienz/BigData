@@ -12,99 +12,99 @@
   </head>
   <body>
     <h1>Model Drift Report</h1>
-    <p>Generated at: 2026-07-22T14:08:21.552865+00:00</p>
-    <p>Reference rows: 5000 | Serving rows: 7</p>
-    <p>Drifted features: amount, risk_score, ml_score, txn_type, severity, is_alert</p>
+    <p>Generated at: 2026-07-25T02:37:23.047025+00:00</p>
+    <p>Reference rows: 5000 | Serving rows: 3000</p>
+    <p>Drifted features: None</p>
     <table>
       <thead>
         <tr><th>Feature</th><th>Metric</th><th>Drift Detected</th><th>Details</th></tr>
       </thead>
       <tbody>
-        <tr><td>amount</td><td>ks_statistic</td><td>True</td><td><pre>{
-  "drift_detected": true,
+        <tr><td>amount</td><td>ks_statistic</td><td>False</td><td><pre>{
+  "drift_detected": false,
   "metric": "ks_statistic",
-  "ks_statistic": 0.469286,
-  "ks_pvalue": 0.062407,
-  "reference_mean": 179181.41492,
-  "serving_mean": 74093.511429,
-  "mean_delta": -105087.903491
+  "ks_statistic": 0.020867,
+  "ks_pvalue": 0.383132,
+  "reference_mean": 179181.414896,
+  "serving_mean": 202902.36225,
+  "mean_delta": 23720.947354
 }</pre></td></tr>
-<tr><td>risk_score</td><td>ks_statistic</td><td>True</td><td><pre>{
-  "drift_detected": true,
+<tr><td>risk_score</td><td>ks_statistic</td><td>False</td><td><pre>{
+  "drift_detected": false,
   "metric": "ks_statistic",
-  "ks_statistic": 0.5896,
-  "ks_pvalue": 0.007665,
-  "reference_mean": 0.591789,
-  "serving_mean": 0.196686,
-  "mean_delta": -0.395103
+  "ks_statistic": 0.0142,
+  "ks_pvalue": 0.839149,
+  "reference_mean": 0.018756,
+  "serving_mean": 0.019185,
+  "mean_delta": 0.000429
 }</pre></td></tr>
-<tr><td>ml_score</td><td>ks_statistic</td><td>True</td><td><pre>{
-  "drift_detected": true,
+<tr><td>ml_score</td><td>ks_statistic</td><td>False</td><td><pre>{
+  "drift_detected": false,
   "metric": "ks_statistic",
-  "ks_statistic": 0.5938,
-  "ks_pvalue": 0.007038,
-  "reference_mean": 1513.259351,
-  "serving_mean": 0.320771,
-  "mean_delta": -1512.93858
+  "ks_statistic": 0.015067,
+  "ks_pvalue": 0.78291,
+  "reference_mean": 0.006195,
+  "serving_mean": 0.006824,
+  "mean_delta": 0.000628
 }</pre></td></tr>
-<tr><td>txn_type</td><td>total_variation_distance</td><td>True</td><td><pre>{
-  "drift_detected": true,
+<tr><td>txn_type</td><td>total_variation_distance</td><td>False</td><td><pre>{
+  "drift_detected": false,
   "metric": "total_variation_distance",
-  "total_variation_distance": 0.342171,
+  "total_variation_distance": 0.0084,
   "distribution": {
     "CASH_IN": {
       "reference": 0.2106,
-      "serving": 0.142857
+      "serving": 0.217333
     },
     "CASH_OUT": {
       "reference": 0.357,
-      "serving": 0.285714
+      "serving": 0.358667
     },
     "DEBIT": {
       "reference": 0.0074,
-      "serving": 0.142857
+      "serving": 0.005667
     },
     "PAYMENT": {
       "reference": 0.346,
-      "serving": 0.142857
+      "serving": 0.339667
     },
     "TRANSFER": {
       "reference": 0.079,
-      "serving": 0.285714
+      "serving": 0.078667
     }
   }
 }</pre></td></tr>
-<tr><td>severity</td><td>total_variation_distance</td><td>True</td><td><pre>{
-  "drift_detected": true,
+<tr><td>severity</td><td>total_variation_distance</td><td>False</td><td><pre>{
+  "drift_detected": false,
   "metric": "total_variation_distance",
-  "total_variation_distance": 0.5896,
+  "total_variation_distance": 0.0018,
   "distribution": {
     "high": {
-      "reference": 0.5896,
-      "serving": 0.0
+      "reference": 0.0008,
+      "serving": 0.000667
     },
     "low": {
-      "reference": 0.4062,
-      "serving": 0.571429
+      "reference": 0.996,
+      "serving": 0.994333
     },
     "medium": {
-      "reference": 0.0042,
-      "serving": 0.428571
+      "reference": 0.0032,
+      "serving": 0.005
     }
   }
 }</pre></td></tr>
-<tr><td>is_alert</td><td>total_variation_distance</td><td>True</td><td><pre>{
-  "drift_detected": true,
+<tr><td>is_alert</td><td>total_variation_distance</td><td>False</td><td><pre>{
+  "drift_detected": false,
   "metric": "total_variation_distance",
-  "total_variation_distance": 0.166829,
+  "total_variation_distance": 0.002067,
   "distribution": {
     "False": {
-      "reference": 0.4046,
-      "serving": 0.571429
+      "reference": 0.9796,
+      "serving": 0.981667
     },
     "True": {
-      "reference": 0.5954,
-      "serving": 0.428571
+      "reference": 0.0204,
+      "serving": 0.018333
     }
   }
 }</pre></td></tr>

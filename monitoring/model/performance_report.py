@@ -31,6 +31,19 @@ def ensure_parent(path: Path) -> None:
 
 
 def compute_binary_metrics(frame: pd.DataFrame) -> dict[str, Any]:
+    if frame.empty or "label_available" not in frame.columns:
+        return {
+            "labeled_rows": 0,
+            "tp": 0,
+            "fp": 0,
+            "tn": 0,
+            "fn": 0,
+            "precision": None,
+            "recall": None,
+            "f1": None,
+            "false_positive_rate": None,
+        }
+
     labeled = frame[frame["label_available"]].copy()
     tp = int((labeled["predicted_positive"] & labeled["actual_positive"]).sum())
     fp = int((labeled["predicted_positive"] & labeled["actual_negative"]).sum())
@@ -90,7 +103,7 @@ def build_performance_summary(predictions_df: pd.DataFrame, reviews_df: pd.DataF
         warnings.append("No labeled negative predictions found. Recall may be optimistic because false negatives are not yet observable from reviewed alerts alone.")
 
     return {
-        "generated_at": pd.Timestamp.utcnow().isoformat(),
+        "generated_at": pd.Timestamp.now("UTC").isoformat(),
         "prediction_rows": prediction_rows,
         "review_rows": int(len(reviews_df)),
         "labeled_rows": labeled_rows,
